@@ -3,8 +3,8 @@ Description=Blender Navcap Service
 
 [Service]
 ExecStart=/usr/bin/blender_navcap
-Environment="BLENDER_NAVCAP_MOUSE=/dev/input/event3"
-Environment="BLENDER_NAVCAP_KEYBOARD=/dev/input/event5"
+Environment="BLENDER_NAVCAP_MOUSE=Logitech Gaming Mouse G502"
+Environment="BLENDER_NAVCAP_KEYBOARD=USB Keyboard"
 
 [Install]
 WantedBy=multi-user.target

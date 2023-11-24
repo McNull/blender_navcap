@@ -156,15 +156,16 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Starting listeners\n\n")
+	fmt.Printf("Starting listeners ...\n\n")
 
 	go startListener(&appCtx, appCtx.Keyboard, appCtx.KeyboardEvents)
 	go startListener(&appCtx, appCtx.Mouse, appCtx.MouseEvents)
 
+	fmt.Printf("Relaying events ...\n")
+
 	for {
 		select {
 		case event := <-appCtx.KeyboardEvents:
-			// fmt.Println("keyboard event:", event)
 			appCtx.KeyState.update(event)
 
 			if appCtx.KeyState.isPressed(abortCombo[:]...) {
@@ -180,9 +181,6 @@ func main() {
 			appCtx.KeyboardOutput.WriteOne(event)
 
 		case event := <-appCtx.MouseEvents:
-			// fmt.Println("mouse event:", event)
-			// appCtx.KeyState.update(event) // not needed?
-
 			processMouseEvent(event, &appCtx)
 
 		case err := <-appCtx.Errors:

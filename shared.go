@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/holoplot/go-evdev"
 )
@@ -52,6 +53,13 @@ func selectDevice(header string) (string, error) {
 	}
 
 	return paths[i].Path, nil
+}
+
+// ----------------------------------------------------------------------
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // ----------------------------------------------------------------------

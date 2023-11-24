@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,9 @@ type AppContext struct {
 
 	Keyboard *evdev.InputDevice
 	Mouse    *evdev.InputDevice
+
+	KeyboardOutputPath string
+	MouseOutputPath    string
 
 	KeyboardOutput *evdev.InputDevice
 	MouseOutput    *evdev.InputDevice
@@ -96,7 +100,72 @@ func (appCtx *AppContext) selectPathsInteractive() error {
 
 // ----------------------------------------------------------------------
 
+func nameToPath(name string) (string, error) {
+	devicePaths, err := evdev.ListDevicePaths()
+
+	if err != nil {
+		return "", err
+	}
+
+	for _, path := range devicePaths {
+		if path.Name == name {
+			return path.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("device not found: %s", name)
+}
+
+// ----------------------------------------------------------------------
+
+func nameOrPath(nameOrPath string) (string, error) {
+	if strings.HasPrefix(nameOrPath, "/dev/input/") && fileExists(nameOrPath) {
+		return nameOrPath, nil
+	} else {
+		return nameToPath(nameOrPath)
+	}
+}
+
+// ----------------------------------------------------------------------
+
+func (appCtx *AppContext) selectPathsFromEnv() error {
+
+	appCtx.KeyboardPath = os.Getenv("BLENDER_NAVCAP_KEYBOARD")
+	appCtx.MousePath = os.Getenv("BLENDER_NAVCAP_MOUSE")
+
+	return nil
+}
+
+// ----------------------------------------------------------------------
+
+func (appCtx *AppContext) selectPathFromArgs() error {
+
+	for _, arg := range appCtx.Args {
+		if strings.HasPrefix(arg, "--keyboard=") {
+			appCtx.KeyboardPath = strings.TrimPrefix(arg, "--keyboard=")
+		} else if strings.HasPrefix(arg, "--mouse=") {
+			appCtx.MousePath = strings.TrimPrefix(arg, "--mouse=")
+		}
+	}
+
+	return nil
+}
+
+// ----------------------------------------------------------------------
+
 func (appCtx *AppContext) selectPaths() error {
+
+	err := appCtx.selectPathsFromEnv()
+
+	if err != nil {
+		return err
+	}
+
+	err = appCtx.selectPathFromArgs()
+
+	if err != nil {
+		return err
+	}
 
 	for _, arg := range appCtx.Args {
 		if arg == "-i" || arg == "--interactive" {
@@ -104,16 +173,20 @@ func (appCtx *AppContext) selectPaths() error {
 		}
 	}
 
-	appCtx.KeyboardPath = os.Getenv("BLENDER_NAVCAP_KEYBOARD")
-
 	if appCtx.KeyboardPath == "" {
-		return fmt.Errorf("environment variable BLENDER_NAVCAP_KEYBOARD not set")
+		return fmt.Errorf("no keyboard device specified")
+	} else {
+		if appCtx.KeyboardPath, err = nameOrPath(appCtx.KeyboardPath); err != nil {
+			return err
+		}
 	}
 
-	appCtx.MousePath = os.Getenv("BLENDER_NAVCAP_MOUSE")
-
 	if appCtx.MousePath == "" {
-		return fmt.Errorf("environment variable BLENDER_NAVCAP_MOUSE not set")
+		return fmt.Errorf("no mouse device specified")
+	} else {
+		if appCtx.MousePath, err = nameOrPath(appCtx.MousePath); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -126,7 +199,6 @@ func (appCtx *AppContext) openDevices() error {
 	var err error
 
 	fmt.Printf("Opening %s\n", appCtx.KeyboardPath)
-
 	appCtx.Keyboard, err = evdev.Open(appCtx.KeyboardPath)
 
 	if err != nil {
@@ -134,35 +206,10 @@ func (appCtx *AppContext) openDevices() error {
 	}
 
 	fmt.Printf("Opening %s\n", appCtx.MousePath)
-
 	appCtx.Mouse, err = evdev.Open(appCtx.MousePath)
 
 	if err != nil {
 		return err
-	}
-
-	absInfos, err := appCtx.Mouse.AbsInfos()
-
-	if err != nil {
-		return err
-	}
-
-	fmt.Print("Mouse absInfos:\n")
-	fmt.Printf("len(absInfos): %d\n", len(absInfos))
-
-	for i, absInfo := range absInfos {
-		// print absInfo.Flat
-		fmt.Printf("%d: %d\n", i, absInfo.Flat)
-		// print absInfo.Fuzz
-		fmt.Printf("%d: %d\n", i, absInfo.Fuzz)
-		// print absInfo.Maximum
-		fmt.Printf("%d: %d\n", i, absInfo.Maximum)
-		// print absInfo.Minimum
-		fmt.Printf("%d: %d\n", i, absInfo.Minimum)
-		// print absInfo.Resolution
-		fmt.Printf("%d: %d\n", i, absInfo.Resolution)
-		// print absInfo.Value
-		fmt.Printf("%d: %d\n", i, absInfo.Value)
 	}
 
 	return nil
@@ -174,19 +221,52 @@ func (appCtx *AppContext) cloneDevices() error {
 
 	var err error
 
-	fmt.Printf("Cloning %s\n", appCtx.KeyboardPath)
+	cloneDevice := func(cloneName string, device *evdev.InputDevice) (*evdev.InputDevice, string, error) {
 
-	appCtx.KeyboardOutput, err = evdev.CloneDevice("Blender NavCap keyboard", appCtx.Keyboard)
+		if name, err := device.Name(); err != nil {
+			return nil, "", err
+		} else {
+			fmt.Printf("Cloning %s (%s)\n", name, device.Path())
+
+			if clone, err := evdev.CloneDevice(cloneName, device); err != nil {
+				return nil, "", err
+			} else {
+				path, _ := nameToPath(cloneName)
+				fmt.Printf("Cloned to %s (%s)\n", cloneName, path)
+
+				return clone, path, nil
+			}
+		}
+	}
+
+	if appCtx.KeyboardOutput, appCtx.KeyboardOutputPath, err = cloneDevice("Blender NavCap Keyboard", appCtx.Keyboard); err != nil {
+		return err
+	}
+
+	if appCtx.MouseOutput, appCtx.MouseOutputPath, err = cloneDevice("Blender NavCap Mouse", appCtx.Mouse); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ----------------------------------------------------------------------
+
+func (appCtx *AppContext) cloneMouseDPI() error {
+
+	fmt.Printf("Cloning mouse DPI rules ...\n")
+
+	dpi, err := getDeviceDPI(appCtx.MousePath)
 
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Cloning %s\n", appCtx.MousePath)
+	fmt.Printf("Current mouse DPI: %s\n", dpi)
 
-	appCtx.MouseOutput, err = evdev.CloneDevice("Blender NavCap mouse", appCtx.Mouse)
+	fmt.Printf("Setting mouse DPI ...\n")
 
-	if err != nil {
+	if err := setMouseDPI(appCtx.MouseOutputPath, dpi); err != nil {
 		return err
 	}
 
@@ -218,6 +298,7 @@ func (appCtx *AppContext) initialize() error {
 		appCtx.selectPaths,
 		appCtx.openDevices,
 		appCtx.cloneDevices,
+		appCtx.cloneMouseDPI,
 		appCtx.grabDevices,
 	)
 
